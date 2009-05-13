@@ -1,6 +1,10 @@
 Revision history for Perl extension Net::SFTP::Server.
 
+0.02  May 13, 2009
+      - write operations implemented
+      - Net::SFTP::Foreign testing framework copied and adapted
+
 0.01  Wed Apr 15 10:15:33 2009
-	- original version; created by h2xs 1.23 with options
+      - original version; created by h2xs 1.23 with options
 		-AXn Net::SFTP::Server
 

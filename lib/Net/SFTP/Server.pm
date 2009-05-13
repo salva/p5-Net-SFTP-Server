@@ -1,6 +1,6 @@
 package Net::SFTP::Server;
 
-$VERSION = '0.01';
+$VERSION = '0.02';
 
 use strict;
 use warnings;
@@ -90,7 +90,6 @@ sub new {
 
     my $self = { protocol_version => 0,
 		 in_fh => $in_fh,
-		 in_fh_closed => undef,
 		 out_fh => $out_fh,
 		 in_buffer => '',
 		 out_buffer => '',
@@ -127,6 +126,7 @@ sub _do_io_unix {
     my $in_buffer_max_size = $self->{in_buffer_max_size};
     my $timeout = $self->{timeout};
     my $packet_len;
+    my $in_fh_closed;
 
     local $SIG{PIPE} = 'IGNORE';
 
@@ -147,7 +147,7 @@ sub _do_io_unix {
 
 	if (defined $packet_len and $wait_for_packet) {
 	    $wait_for_packet = ($packet_len > length $$in_b and
-				!$self->{in_fh_closed});
+				!$in_fh_closed);
 	    $debug and $debug & 32 and _debug "wait_for_packet set to $wait_for_packet";
 	}
 
@@ -160,12 +160,14 @@ sub _do_io_unix {
 	last unless ($wait_for_packet or length $$out_b);
 
 	my $rb = '';
-	length $$in_b < $in_buffer_max_size and
-	    !$self->{in_fh_closed} and
-		vec($rb, $in_fn, 1) = 1;
+	length $$in_b < $in_buffer_max_size
+	    and !$in_fh_closed
+		and vec($rb, $in_fn, 1) = 1;
 
 	my $wb = '';
 	vec($wb, $out_fn, 1) = 1 if length $$out_b;
+
+	$rb eq '' and $wb eq '' and croak "Internal error: useless select";
 
 	my $n = select($rb, $wb, undef, $timeout);
 	$debug and $debug & 32 and _debug "_do_io_unix select n: $n";
@@ -194,7 +196,11 @@ sub _do_io_unix {
 			    length $$in_b);
 		    $debug & 1024 and $bytes and _hexdump(substr($$in_b, -$bytes));
 		}
-		$self->{in_fh_closed} = 1 unless $bytes;
+		unless ($bytes) {
+		    $self->set_error_and_exit(1, "Connection closed by remote peer");
+		    $in_fh_closed = 1;
+		    undef $wait_for_packet;
+		}
 	    }
 	}
 	else {
@@ -209,8 +215,7 @@ sub _do_io_unix {
 	and _debugf("_do_io_unix done, wait_for_packet: %d, packet_len: %s, in buffer: %d, out buffer: %d",
 		    $wait_for_packet, ($packet_len // 'undef'), length($$in_b), length($$out_b));
 
-
-    return 1;
+    return !$in_fh_closed;
 }
 
 *_do_io = \&_do_io_unix;
@@ -520,7 +525,7 @@ Net::SFTP::Server - Base class for writting SFTP servers
 
 =head1 SYNOPSIS
 
-  use parent Net::SFTP::Server;
+  use parent qw(Net::SFTP::Server);
   ...
 
 =head1 DESCRIPTION

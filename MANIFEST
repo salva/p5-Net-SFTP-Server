@@ -7,6 +7,9 @@ lib/Net/SFTP/Server/FS.pm
 Makefile.PL
 MANIFEST
 README
+t/1_run.t
+t/common.pm
+t/Net-SFTP-Server-FS.t
 t/Net-SFTP-Server.t
 t/pods.t
 META.yml                                 Module meta-data (added by MakeMaker)

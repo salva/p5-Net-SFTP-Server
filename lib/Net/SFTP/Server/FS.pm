@@ -7,6 +7,7 @@ use Carp;
 use Fcntl;
 use File::Spec;
 use File::Strmode;
+use Cwd qw(realpath);
 
 use Net::SFTP::Server::Constants qw(:all);
 
@@ -21,33 +22,6 @@ BEGIN {
 }
 
 our $debug;
-
-sub open_flags_to_posix {
-    my ($self, $flags) = @_;
-    my $posix = 0;
-    if ($flags & SSH_FXF_READ) {
-	if ($flags & SSH_FXF_WRITE) {
-	    $posix = O_RDWR;
-	}
-	else {
-	    $posix = O_RDONLY;
-	}
-    }
-    elsif ($flags & SSH_FXF_WRITE) {
-	$posix = O_WRONLY;
-    }
-    if ($flags & SSH_FXF_CREAT) {
-	$posix |= O_CREAT;
-    }
-    if ($flags & SSH_FXF_TRUNC) {
-	$posix |= O_TRUNC;
-    }
-    if ($flags & SSH_FXF_EXCL) {
-	$posix |= O_EXCL;
-    }
-    $debug and $debug & 128 and _debug "flags $flags to posix $posix";
-    $posix;
-}
 
 sub new {
     my $class = shift;
@@ -113,12 +87,79 @@ sub push_status_errno_response {
     $self->push_status_response($id, $self->errno_to_status($!), $!);
 }
 
+sub sftp_open_flags_to_sysopen {
+    my ($self, $flags) = @_;
+    my $posix = 0;
+    if ($flags & SSH_FXF_READ) {
+	if ($flags & SSH_FXF_WRITE) {
+	    $posix = O_RDWR;
+	}
+	else {
+	    $posix = O_RDONLY;
+	}
+    }
+    elsif ($flags & SSH_FXF_WRITE) {
+	$posix = O_WRONLY;
+    }
+    if ($flags & SSH_FXF_CREAT) {
+	$posix |= O_CREAT;
+    }
+    if ($flags & SSH_FXF_TRUNC) {
+	$posix |= O_TRUNC;
+    }
+    if ($flags & SSH_FXF_EXCL) {
+	$posix |= O_EXCL;
+    }
+    $debug and $debug & 128 and _debug "flags $flags to posix $posix";
+    $posix;
+}
+
+sub _set_attrs {
+    my ($obj, $attrs) = @_;
+    local $@;
+    local $SIG{__DIE__};
+    eval {
+	if ($attrs) {
+	    if (defined $attrs->{size}) {
+		truncate $obj, $attrs->{size} or return;
+	    }
+	    if (defined $attrs->{permissions}) {
+		chmod $attrs->{permissions}, $obj or return;
+	    }
+	    if (defined $attrs->{gid}) {
+		chown $attrs->{uid}, $attrs->{gid}, $obj or return;
+	    }
+	    if (defined $attrs->{atime}) {
+		utime $attrs->{atime}, $attrs->{mtime}, $obj or return;
+	    }
+	}
+	1;
+    };
+}
+
 sub handle_command_open_v3 {
     my ($self, $id, $path, $flags, $attrs) = @_;
-    my $perms = $attrs->{mode} // 0666;
-    my $pflags = $self->open_flags_to_posix($flags);
-    sysopen my $fh, $path, $pflags, $perms
-	or return $self->push_status_errno_response($id);
+    my ($old_umask, $writable);
+    my $pflags = $self->sftp_open_flags_to_sysopen($flags);
+    my $perms = $attrs->{mode};
+    if (defined $perms) {
+	$writable = $perms & SSH_FXF_WRITE;
+	$old_umask = umask $perms;
+    }
+    else {
+	$perms = 0666;
+    }
+    my $fh;
+    unless (sysopen $fh, $path, $pflags, $perms) {
+	$self->push_status_errno_response($id);
+	umask $old_umask if defined $old_umask;
+	return;
+    }
+    umask $old_umask if defined $old_umask;
+    if ($writable) {
+	_set_attrs($path, $attrs)
+	    or $self->send_status_errno_response($id);
+    }
     my $hid = $self->save_file_handler($fh, $flags, $perms);
     $debug and $debug & 2 and _debug "file $path open as $hid (pkt id: $id)";
     $self->push_handle_response($id, $hid);
@@ -140,6 +181,21 @@ sub handle_command_read_v3 {
     $self->push_packet(uint8 => SSH_FXP_DATA,
 		       uint32 => $id,
 		       str => $data);
+}
+
+sub handle_command_write_v3 {
+    my ($self, $id, $hid, $off) = @_;
+    my $fh = $self->get_file_handler($hid) //
+	return $self->push_status_response($id, SSH_FX_FAILURE,
+					   "Bad handler");
+    sysseek($fh, $off, 0) // return $self->push_status_errno_response($id);
+    my $len = length $_[4];
+    while ($len) {
+	my $bytes = syswrite($fh, $_[4], $len, -$len)
+	    or return $self->push_status_errno_response($id);
+	$len -= $bytes;
+    }
+    $self->push_status_ok_response($id);
 }
 
 sub handle_command_close_v3 {
@@ -228,7 +284,6 @@ sub handle_command_readdir_v3 {
 	last if @entry > 200;
     }
     @entry or return $self->push_status_eof_response($id);
-    
     $self->push_name_response($id, map $self->readdir_name($path, $_), @entry);
 }
 
@@ -260,12 +315,96 @@ sub handle_command_stat_v3 {
 
 sub handle_command_fstat_v3 {
     my ($self, $id, $hid) = @_;
-    my $fh = $self->get_handler($hid);
-    defined $fh
-	or return $self->push_status_response($id, SSH_FX_FAILURE, "Bad file handler");
+    my $fh = $self->get_handler($hid)
+	// return $self->push_status_response($id, SSH_FX_FAILURE,
+					      "Bad file handler");
     my @stat = stat $fh
 	or return $self->push_status_errno_response($id);
     $self->push_attrs_response($id, $self->stat_to_attrs(@stat));
+}
+
+sub _set_attrs_and_push_status_response {
+    my ($self, $id, $obj, $attrs) = @_;
+    _set_attrs($obj, $attrs)
+	? $self->push_status_ok_response($id)
+	: $self->push_status_errno_response($id);
+}
+
+sub handle_command_setstat_v3 {
+    _set_attrs_and_push_status_response(@_)
+}
+
+sub handle_command_fsetstat_v3 {
+    my ($self, $id, $hid, $attrs) = @_;
+    my $fh = $self->get_file_handler($hid)
+	// return $self->push_status_response($id, SSH_FX_FAILURE,
+					      "Bad file handler");
+    _set_attrs_and_push_status_response($self, $id, $fh, $attrs);
+}
+
+sub handle_command_remove_v3 {
+    my ($self, $id, $path) = @_;
+    unlink $path
+	or return $self->push_status_errno_response($id);
+    $self->push_status_ok_response($id);
+}
+
+sub handle_command_mkdir_v3 {
+    my ($self, $id, $path, $attrs) = @_;
+    my $old_umask;
+
+    $old_umask = umask $attrs->{permissions}
+	if defined $attrs->{permissions};
+
+    unless (mkdir $path) {
+	$self->send_status_errno_response($id);
+	umask $old_umask if defined $old_umask;
+	return;
+    }
+    umask $old_umask if defined $old_umask;
+    _set_attrs_and_push_status_response($self, $id, $path, $attrs);
+}
+
+sub handle_command_rmdir_v3 {
+    my ($self, $id, $path) = @_;
+    rmdir $path
+	or return $self->push_status_errno_response($id);
+    $self->push_status_ok_response($id);
+}
+
+sub handle_command_realpath_v3 {
+    my ($self, $id, $path) = @_;
+    local $@;
+    local $SIG{__DIE__};
+    my $realpath = eval { realpath($path) }
+	// return $self->push_status_errno_response($id);
+    $self->push_name_response($id, { filename => $realpath });
+}
+
+sub handle_command_rename_v3 {
+    my ($self, $id, $old, $new) = @_;
+    -e $new and
+	return $self->push_status_response($id, SSH_FX_FAILURE, "File exists");
+    rename $old, $new or
+	return $self->push_status_errno_response($id);
+    $self->push_status_ok_response($id);
+}
+
+sub handle_command_readlink_v3 {
+    my ($self, $id, $path) = @_;
+    local $@;
+    local $SIG{__DIE__};
+    my $readlink = eval { readlink($path) }
+	// return $self->push_status_errno_response($id);
+
+    $self->push_name_response($id, { filename => $readlink });
+}
+
+sub handle_command_symlink_v3 {
+    my ($self, $id, $target, $link) = @_;
+    eval { symlink $target, $link }
+	or $self->push_status_errno_message($id);
+    $self->push_status_ok_message($id);
 }
 
 1;
@@ -285,8 +424,23 @@ Net::SFTP::Server::FS - SFTP server that uses the file system for storage
 
 =head1 DESCRIPTION
 
-This is a work in progress, currently only most common read operations
-are supported.
+This module implements an standard SFTP server that uses the file
+system for storage.
+
+All the operations described on the protocol draft version 3 are
+supported.
+
+Also, this module serves as an example of how to develop an SFTP
+server on top of L<Net::SFTP::Server>, just read its source code!
+
+=head1 BUGS AND SUPPORT
+
+This is an early release that may contain lots of bugs... report them,
+please!
+
+=head1 SEE ALSO
+
+L<Net::SFTP::Server> and the companion script L<sftp-server-fs-perl(8)>.
 
 =head1 COPYRIGHT AND LICENSE
 
