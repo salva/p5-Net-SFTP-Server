@@ -139,11 +139,11 @@ sub _set_attrs {
 
 sub handle_command_open_v3 {
     my ($self, $id, $path, $flags, $attrs) = @_;
-    my ($old_umask, $writable);
+    my $writable = $flags & SSH_FXF_WRITE;
     my $pflags = $self->sftp_open_flags_to_sysopen($flags);
     my $perms = $attrs->{mode};
+    my $old_umask;
     if (defined $perms) {
-	$writable = $perms & SSH_FXF_WRITE;
 	$old_umask = umask $perms;
     }
     else {
