@@ -102,3 +102,25 @@ DESTROY {
 
 my $server = main->new();
 $server->run;
+
+__END__
+
+=head1 NAME
+
+sftp-server-atomit-put
+
+=head1 DESCRIPTION
+
+This programs provides an sftp-server that handles put requests
+writing the incoming data to a temporal file that is moved to its
+final destination after the transfer completes.
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (C) 2009 by Salvador FandiE<ntilde>o (sfandino@yahoo.com)
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself, either Perl version 5.10.0 or,
+at your option, any later version of Perl 5 you may have available.
+
+=cut
