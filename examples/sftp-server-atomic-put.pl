@@ -8,9 +8,6 @@ use warnings;
 use parent 'Net::SFTP::Server::FS';
 use Net::SFTP::Server::Constants qw(:all);
 
-use File::Copy;
-use Carp;
-
 sub new {
     my $class = shift;
     my $self = $class->SUPER::new(@_);
