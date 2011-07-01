@@ -1,6 +1,6 @@
 package Net::SFTP::Server;
 
-$VERSION = '0.02';
+$VERSION = '0.03';
 
 use strict;
 use warnings;

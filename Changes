@@ -1,5 +1,9 @@
 Revision history for Perl extension Net::SFTP::Server.
 
+0.03
+       - bug on open handler not setting permissions solved
+       - add another sample server sftp-server-atomic-put.pl
+
 0.02  May 13, 2009
       - write operations implemented
       - Net::SFTP::Foreign testing framework copied and adapted
