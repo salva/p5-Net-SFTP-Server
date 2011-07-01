@@ -2,7 +2,7 @@ package Net::SFTP::Server::FS;
 
 use strict;
 use warnings;
-use Carp;
+# use Carp;
 
 use Fcntl;
 use File::Spec;
@@ -211,7 +211,7 @@ sub handle_command_close_v3 {
 	close($fh) or return $self->push_status_errno_response($id);
     }
     else {
-	croak "Internal error: unknown handler type $type";
+	die "Internal error: unknown handler type $type";
     }
     $self->push_status_ok_response($id);
 }

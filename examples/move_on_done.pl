@@ -1,17 +1,15 @@
 #!/usr/bin/perl
 
+
+use 5.010;
 use strict;
 use warnings;
 
-
-my $server = Server->new(timeout => 15);
-$server->run;
-exit(0);
-
-package Server;
-
 use parent 'Net::SFTP::Server::FS';
-use File::Temp qw(tempfile);
+use Net::SFTP::Server::Constants qw(:all);
+
+use File::Copy;
+use Carp;
 
 sub new {
     my $class = shift;
@@ -24,26 +22,31 @@ sub handle_command_open_v3 {
     my ($self, $id, $path, $flags, $attrs) = @_;
     my $writable = $flags & SSH_FXF_WRITE;
     my $perms = $attrs->{mode};
-    my ($old_umask, $fh, $tfh, $old_path);
+    my ($old_umask, $fh, $target_path);
+    if (exists $self->{overlay}{$path}) {
+        $path = $self->{overlay}{$path}
+    }
+    elsif ($writable) {
+        if ( (-f $path and $flags & SSH_FXF_TRUNC) or
+             (!-e $path and $flags & SSH_FXF_CREAT) )  {
+            $target_path = $path;
+            $path .= '.part';
+            if (-e $path) {
+                $self->push_status_response($id, SSH_FX_FAILURE, "A temporal file blocks the transfer");
+                return;
+            }
+            $flags |= SSH_FXF_CREAT|SSH_FXF_TRUNC;
+        }
+    }
+    my $pflags = $self->sftp_open_flags_to_sysopen($flags);
     if (defined $perms) {
 	$old_umask = umask $perms;
     }
     else {
 	$perms = 0666;
     }
-    my $pflags = $self->sftp_open_flags_to_sysopen($flags & ~(SSH_FXF_TRUNC|SSH_FXF_CREAT));
-    if (exists $self->{reverse_overlay}{$path}) {
-        $path = $self->{reverse_overlay}{$path}
-    }
-    else {
-        if ( (-f $path and $flags & SSH_FXF_TRUNC) or
-            (!-f $path and $flags & SSH_FXF_CREAT) ) {
-            $old_path = $path;
-            ($tfh, $path) = tempfile($template, DIR => "/tmp/");
-            $pflags &= ~(SSH_FXF_TRUNC|SSH_FXF_CREAT);
-        }
-    }
     unless (sysopen $fh, $path, $pflags, $perms) {
+        die "error: $!";
         $self->push_status_errno_response($id);
         umask $old_umask if defined $old_umask;
         return;
@@ -53,26 +56,49 @@ sub handle_command_open_v3 {
 	Net::SFTP::Server::FS::_set_attrs($path, $attrs)
 	    or $self->send_status_errno_response($id);
     }
-    my $hid = $self->save_file_handler($fh, $flags, $perms, $old_path // $path);
-    $self->{overlay}{$old_path} = {$path} if defined $old_path;
-    $debug and $debug & 2 and _debug "file $path open as $hid (pkt id: $id)";
+    my $hid = $self->save_file_handler($fh, $flags, $perms, $target_path // $path);
+    $self->{overlay}{$target_path} = $path if defined $target_path;
     $self->push_handle_response($id, $hid);
 }
 
 sub handle_command_close_v3 {
     my ($self, $id, $hid) = @_;
-    my ($type, $fh) = $self->remove_handler($hid)
+    my ($type, $fh, undef, undef, $target_path) = $self->remove_handler($hid)
 	or return $self->push_status_response($id, SSH_FX_FAILURE, "Bad file handler");
     if ($type eq 'dir') {
-	$debug and $debug & 2 and _debug "closing dir handle $hid (id: $id)";
 	closedir($fh) or return $self->push_status_errno_response($id);
     }
     elsif ($type eq 'file') {
-	$debug and $debug & 2 and _debug "closing file handle $hid (id: $id)";
+        my $path = delete $self->{overlay}{$target_path};
 	close($fh) or return $self->push_status_errno_response($id);
+        if (defined $path) {
+            rename $path, $target_path or return $self->push_status_errno_response($id);
+        }
     }
     else {
-	croak "Internal error: unknown handler type $type";
+	die "Internal error: unknown handler type $type";
     }
     $self->push_status_ok_response($id);
 }
+
+for my $action (qw(lstat stat setstat)) {
+    my $method = "handle_command_${action}_v3";
+    my $super = Net::SFTP::Server::FS->can($method);
+    no strict 'refs';
+    *$method = sub {
+        my ($self, $id, $target_path) = @_;
+        my $path = $self->{overlay}{$target_path} // $target_path;
+        $super->($self, $id, $path);
+    };
+}
+
+DESTROY {
+    local ($!, $?, $@);
+    my $self = shift;
+    unlink $_ for (values %{$self->{overlay}});
+}
+
+
+
+my $server = main->new();
+$server->run;
