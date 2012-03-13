@@ -478,6 +478,8 @@ sub server_extensions {
     return ('libnet-sftp-server@cpan.org' => 1);
 }
 
+
+
 sub _make_packet_handler {
     my $name = shift;
     my @args = map "\n        (buf_shift_$_(\$_[3]) // goto BAD_PACKET)", @_;
@@ -545,7 +547,8 @@ implementing an standard SFTP server.
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2009, 2011 by Salvador FandiE<ntilde>o (sfandino@yahoo.com)
+Copyright (C) 2009, 2011, 2012 by Salvador FandiE<ntilde>o
+(sfandino@yahoo.com)
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.10.0 or,

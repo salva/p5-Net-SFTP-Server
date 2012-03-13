@@ -1,11 +1,7 @@
 #!/usr/bin/perl
 
-use 5.010;
-use strict;
-use warnings;
-
 use parent 'Net::SFTP::Server::FS';
-use Net::SFTP::Server::Constants qw(:all);
+use Net::SFTP::Server::Constants qw(SSH_FX_PERMISSION_DENIED);
 
 sub handle_command_mkdir_v3 {
     my ($self, $id) = @_;
