@@ -1,6 +1,6 @@
 package Net::SFTP::Server;
 
-$VERSION = '0.03';
+our $VERSION = '0.04';
 
 use strict;
 use warnings;
@@ -474,11 +474,30 @@ sub handle_command_init_v0 {
 		       map { (str => $_) } $self->server_extensions);
 }
 
-sub server_extensions {
-    return ('libnet-sftp-server@cpan.org' => 1);
+sub ext_vendor_id__vendor_data {
+    my $self = shift;
+    my $version = $self->VERSION // $VERSION;
+    no warnings;
+    return ( "cpan.org",
+             "libnet-sftp-server",
+             $version,
+             int($version * 100_000 ) );
 }
 
+sub ext_vendor_id__vendor_structure {
+    my $self = shift;
+    my $packed = '';
+    my @data = $self->ext_vendor_id__vendor_data;
+    buf_push_utf8($packed, $data[$_]) for (0..2);
+    buf_push_uint64($packed, $data[3]);
+    $packed;
+}
 
+sub server_extensions {
+    my $self = shift;
+    return ('vendor-id' => $self->ext_vendor_id__vendor_structure,
+            'libnet-sftp-server@cpan.org' => 1);
+}
 
 sub _make_packet_handler {
     my $name = shift;
