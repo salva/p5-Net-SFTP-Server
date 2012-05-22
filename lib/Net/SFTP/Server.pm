@@ -87,6 +87,7 @@ sub new {
     my $out_fh = _prepare_fh(out => delete $opts{out_fh});
 
     my $timeout = delete $opts{timeout};
+    my $newline = delete $opts{newline};
 
     my $self = { protocol_version => 0,
 		 in_fh => $in_fh,
@@ -98,6 +99,7 @@ sub new {
 		 packet_handler_cache => [],
 		 command_handler_cache => [],
 		 timeout => $timeout,
+                 newline => $newline,
 	       };
 
     bless $self, $class;
@@ -469,8 +471,9 @@ sub handle_command_init_v0 {
     shift; # $id
     my $version = shift;
     $version >= 3 or return $self->bad_packet(1);
-    $self->set_protocol_version(3);
-    $self->push_packet(uint8 => SSH_FXP_VERSION, uint32 => 3,
+    $self->set_protocol_version($version > 3 ? 4 : 3);
+    $self->push_packet(uint8 => SSH_FXP_VERSION,
+                       uint32 => $self->{protocol_version},
 		       map { (str => $_) } $self->server_extensions);
 }
 

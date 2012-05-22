@@ -142,7 +142,7 @@ sub buf_push_utf8 {
 
 }
 
-sub buf_push_attrs {
+sub buf_push_attrs_v3 {
     my $attrs = $_[1];
     my $b = '';
     my $flags;
@@ -199,6 +199,79 @@ sub buf_push_attrs {
 	# optimization for the common send-nothing
 	buf_push_uint32($_[0], 0);
     }
+}
+
+sub buf_push_attr_v4 {
+ my $attrs = $_[1];
+    my $b = '';
+    my $flags;
+    ref $attrs eq 'HASH' or croak "Internal error";
+    if (%$attrs) {
+        my $type = $attrs->{type};
+        my $perm = $attrs->{permissions};
+        unless (defined $type) {
+            if (defined $perm) {
+                $type = ( S_IFREG($perm) ? SSH_FILEXFER_TYPE_REGULAR   :
+                          S_IFDIR($perm) ? SSH_FILEXFER_TYPE_DIRECTORY :
+                          S_IFLNK($perm) ? SSH_FILEXFER_TYPE_SYMLINK   :
+                                           SSH_FILEXFER_TYPE_SPECIAL
+                        );
+            }
+            else {
+                $type = SSH_FILEXFER_TYPE_UNKNOWN;
+            }
+        }
+        buf_push_uint8($b, $type);
+
+        if (defined $attrs->{size}) {
+	    $flags |= SSH_FILEXFER_ATTR_SIZE;
+	    buf_push_uint64($b, $attrs->{size});
+	}
+
+        my $owner = $attrs->{owner};
+        my $group = $attrs->{group};
+
+        my $uid = $attrs->{uid};
+        my $gid = $attrs->{gid};
+
+        unless (defined $owner) {
+            if (defined $uid) {
+                if (my @ent = getpwuid($uid)) {
+                    $owner = $ent[0];
+                    $gid = $ent[3] unless defined $gid;
+                }
+            }
+        }
+
+        if (defined $owner and not defined $group) {
+            unless (defined $gid) {
+                if (my @ent = getpwd...
+            }
+        }
+
+	if (defined $attrs->{uid} and defined $attrs->{gid}) {
+	    $flags |= SSH_FILEXFER_ATTR_UIDGID;
+	    buf_push_uint32($b, $attrs->{uid});
+	    buf_push_uint32($b, $attrs->{gid});
+	}
+	elsif (defined $attrs->{uid} or defined $attrs->{gid}) {
+	    croak "Internal error: invalid attributes specification, uid and gid go together";
+	}
+
+	if (defined $attrs->{permissions}) {
+	    $flags |= SSH_FILEXFER_ATTR_PERMISSIONS;
+	    buf_push_uint32($b, $attrs->{permissions});
+	}
+
+	if (defined $attrs->{atime} and defined $attrs->{mtime}) {
+	    $flags |= SSH_FILEXFER_ATTR_ACMODTIME;
+	    buf_push_uint32($b, $attrs->{atime});
+	    buf_push_uint32($b, $attrs->{mtime});
+	}
+	elsif (defined $attrs->{atime} or defined $attrs->{mtime}) {
+	    croak "Internal error: invalid attributes specification, atime and mtime go together";
+	}
+
 }
 
 sub buf_push_name {
